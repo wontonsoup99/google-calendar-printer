@@ -5,6 +5,8 @@ const {google} = require('googleapis');
 const http = require('http');
 const url = require('url');
 const readline = require('readline');
+const { exec } = require('child_process');
+const schedule = require('node-schedule');
 
 // If modifying these scopes, delete token.json.
 const SCOPES = ['https://www.googleapis.com/auth/calendar.readonly'];
@@ -120,7 +122,30 @@ async function authorize() {
 }
 
 /**
- * Lists the events for the current day on the user's primary calendar.
+ * Prints text to the thermal printer via serial port
+ * @param {string} text The text to print
+ */
+function printToThermalPrinter(text) {
+  // Set the serial port baud rate
+  exec('stty -F /dev/serial0 19200', (error) => {
+    if (error) {
+      console.error('Error setting baud rate:', error);
+      return;
+    }
+    
+    // Print the text to the serial port
+    exec(`echo -e "${text}" > /dev/serial0`, (error) => {
+      if (error) {
+        console.error('Error printing to thermal printer:', error);
+      } else {
+        console.log('Successfully printed to thermal printer');
+      }
+    });
+  });
+}
+
+/**
+ * Lists the events for the current day and prints them to the thermal printer.
  * @param {google.auth.OAuth2} auth An authorized OAuth2 client.
  */
 async function listEvents(auth) {
@@ -142,16 +167,70 @@ async function listEvents(auth) {
   const events = res.data.items;
   if (!events || events.length === 0) {
     console.log('No events found for today.');
+    const noEventsText = `\\n\\nTODAY'S AGENDA\\n${startOfDay.toLocaleDateString()}\\n\\nNo events scheduled\\n\\n\\n\\n`;
+    printToThermalPrinter(noEventsText);
     return;
   }
   
+  // Format the agenda for thermal printing
+  let agendaText = `\\n\\nTODAY'S AGENDA\\n${startOfDay.toLocaleDateString()}\\n\\n`;
+  
+  events.forEach((event, i) => {
+    const start = event.start.dateTime || event.start.date;
+    const startTime = new Date(start);
+    const timeString = startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const eventSummary = event.summary || 'No title';
+    
+    agendaText += `${timeString} - ${eventSummary}\\n`;
+  });
+  
+  agendaText += `\\n\\n\\n\\n`; // Add extra newlines for paper feed
+  
+  // Print to console
   console.log(`Today's agenda (${startOfDay.toLocaleDateString()}):`);
-  events.map((event, i) => {
+  events.forEach((event, i) => {
     const start = event.start.dateTime || event.start.date;
     const startTime = new Date(start);
     const timeString = startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     console.log(`${timeString} - ${event.summary}`);
   });
+  
+  // Print to thermal printer
+  printToThermalPrinter(agendaText);
 }
 
-authorize().then(listEvents).catch(console.error);
+/**
+ * Schedules the agenda printing job
+ */
+function scheduleAgendaPrinting() {
+  // Schedule to run every weekday (Monday-Friday) at 8:00 AM MST
+  const job = schedule.scheduleJob('0 8 * * 1-5', async () => {
+    console.log('Running scheduled agenda print job...');
+    try {
+      const auth = await authorize();
+      await listEvents(auth);
+    } catch (error) {
+      console.error('Error in scheduled job:', error);
+    }
+  });
+  
+  console.log('Agenda printing scheduled for weekdays at 8:00 AM MST');
+  console.log('Press Ctrl+C to stop the scheduler');
+  
+  // Keep the process running
+  process.on('SIGINT', () => {
+    console.log('Stopping scheduler...');
+    job.cancel();
+    process.exit(0);
+  });
+}
+
+// Check if we should run immediately or schedule
+const args = process.argv.slice(2);
+if (args.includes('--now') || args.includes('-n')) {
+  // Run immediately
+  authorize().then(listEvents).catch(console.error);
+} else {
+  // Schedule for weekdays at 8am MST
+  scheduleAgendaPrinting();
+}
