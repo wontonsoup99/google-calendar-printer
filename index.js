@@ -126,7 +126,18 @@ async function authorize() {
  * @param {string} text The text to print
  */
 function printToThermalPrinter(text) {
-  // Set the serial port baud rate
+  // Check if we're on a system with serial port (Raspberry Pi)
+  const isDevelopment = process.platform === 'darwin'; // macOS
+  
+  if (isDevelopment) {
+    console.log('=== THERMAL PRINTER OUTPUT (Development Mode) ===');
+    console.log(text.replace(/\\n/g, '\n'));
+    console.log('=== END THERMAL PRINTER OUTPUT ===');
+    console.log('(This would print to thermal printer on Raspberry Pi)');
+    return;
+  }
+  
+  // Production mode - print to actual thermal printer
   exec('stty -F /dev/serial0 19200', (error) => {
     if (error) {
       console.error('Error setting baud rate:', error);
@@ -134,7 +145,7 @@ function printToThermalPrinter(text) {
     }
     
     // Print the text to the serial port
-    exec(`echo -e "${text}" > /dev/serial0`, (error) => {
+    exec(`echo "${text}" > /dev/serial0`, (error) => {
       if (error) {
         console.error('Error printing to thermal printer:', error);
       } else {
@@ -178,7 +189,15 @@ async function listEvents(auth) {
   events.forEach((event, i) => {
     const start = event.start.dateTime || event.start.date;
     const startTime = new Date(start);
-    const timeString = startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    
+    // Convert to MST (Mountain Standard Time)
+    const mstTime = new Date(startTime.toLocaleString("en-US", {timeZone: "America/Denver"}));
+    const timeString = mstTime.toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit',
+      timeZone: 'America/Denver'
+    });
+    
     const eventSummary = event.summary || 'No title';
     
     agendaText += `${timeString} - ${eventSummary}\\n`;
@@ -191,7 +210,15 @@ async function listEvents(auth) {
   events.forEach((event, i) => {
     const start = event.start.dateTime || event.start.date;
     const startTime = new Date(start);
-    const timeString = startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    
+    // Convert to MST (Mountain Standard Time)
+    const mstTime = new Date(startTime.toLocaleString("en-US", {timeZone: "America/Denver"}));
+    const timeString = mstTime.toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit',
+      timeZone: 'America/Denver'
+    });
+    
     console.log(`${timeString} - ${event.summary}`);
   });
   
@@ -227,10 +254,14 @@ function scheduleAgendaPrinting() {
 
 // Check if we should run immediately or schedule
 const args = process.argv.slice(2);
+console.log('Command line arguments:', args);
+
 if (args.includes('--now') || args.includes('-n')) {
+  console.log('Running immediately with --now flag');
   // Run immediately
   authorize().then(listEvents).catch(console.error);
 } else {
+  console.log('Starting scheduler (no --now flag detected)');
   // Schedule for weekdays at 8am MST
   scheduleAgendaPrinting();
 }
